@@ -1,5 +1,10 @@
 .App {
   text-align: center;
+  font-family: 'Courier New', Courier, monospace;
+  background: url('https://cdn.pixabay.com/photo/2017/08/30/01/05/milky-way-2695569_1280.jpg');
+  background-size:     cover;
+  background-repeat:   no-repeat;
+  background-position: center center; 
 }
 
 .App-logo {
@@ -14,7 +19,6 @@
 }
 
 .App-header {
-  background-color: #282c34;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
