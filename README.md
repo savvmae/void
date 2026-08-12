@@ -1,70 +1,210 @@
-# Getting Started with Create React App
+# void
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A magic 8 ball. Ask it a question, it answers from the void.
 
-## Available Scripts
+Answers live in a Supabase table you own. Anyone can submit a new answer; every
+submission is screened by Claude before it can show up.
 
-In the project directory, you can run:
+Live site: https://savvmae.github.io/void/
 
-### `npm start`
+---
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+## How it fits together
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+```
+browser (Create React App, GitHub Pages)
+  |
+  |-- read:  supabase-js -> answers table (RLS: anon can only SELECT approved rows)
+  |
+  '-- write: POST -> submit-answer edge function
+                       |-- validates + rate limits (hashed IP)
+                       |-- Anthropic Messages API (moderation verdict)
+                       '-- inserts with the service role key
+```
 
-### `npm test`
+Two keys, two very different rules:
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+- **Supabase anon key** — ships in the browser bundle. That is fine and
+  expected. Row level security is what actually enforces access: anon can read
+  approved answers and cannot write anything.
+- **Anthropic API key** — server side only. It is a Supabase secret read by the
+  edge function. It must never appear in `.env`, in the bundle, or in this repo.
 
-### `npm run build`
+---
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+## Setup, in order
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+Everything below is a one time setup. You need the
+[Supabase CLI](https://supabase.com/docs/guides/cli) for steps 4 and 5; it is
+not installed on this machine yet.
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+### 1. Create the Supabase project
 
-### `npm run eject`
+1. Go to https://supabase.com/dashboard and create a new project.
+2. Pick a region near you and save the database password somewhere safe.
+3. Wait for it to finish provisioning.
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+### 2. Run the SQL
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+1. In the dashboard: **SQL Editor → New query**.
+2. Paste the entire contents of [`supabase/schema.sql`](supabase/schema.sql).
+3. Run it.
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+That creates the `answers` table, turns on row level security, adds the policy
+that lets anon read only approved rows, creates the indexes, and seeds the 20
+classic magic 8 ball answers. The file is safe to re-run.
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+Sanity check in **Table Editor → answers**: 20 rows, all `status = approved`,
+`source = seed`.
 
-## Learn More
+### 3. Set the frontend env vars
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+1. In the dashboard: **Project Settings → API**.
+2. Copy **Project URL** and the **anon public** key.
+3. In the repo root:
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+   ```sh
+   cp .env.example .env
+   ```
 
-### Code Splitting
+4. Fill in:
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+   ```
+   REACT_APP_SUPABASE_URL=https://<your-project-ref>.supabase.co
+   REACT_APP_SUPABASE_ANON_KEY=<your anon public key>
+   ```
 
-### Analyzing the Bundle Size
+`.env` is gitignored. If either variable is missing the app still loads — it
+just tells you it is not hooked up instead of crashing.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+At this point `npm start` gives you a working 8 ball reading from your own
+database. Submitting answers needs steps 4 and 5.
 
-### Making a Progressive Web App
+### 4. Set the Anthropic key (and the IP salt) as Supabase secrets
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+Install the CLI and link the project:
 
-### Advanced Configuration
+```sh
+brew install supabase/tap/supabase
+supabase login
+supabase link --project-ref <your-project-ref>
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+Then set the secrets. `<your-project-ref>` is the subdomain in your project
+URL; the Anthropic key comes from https://console.anthropic.com → API keys.
 
-### Deployment
+```sh
+supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+# Optional but recommended. Any long random string. Used to salt the SHA-256
+# of the caller IP so the stored hashes cannot be brute forced.
+supabase secrets set IP_HASH_SALT="$(openssl rand -hex 32)"
+```
 
-### `npm run build` fails to minify
+`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected into edge functions
+automatically. Do not set those yourself.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+You can confirm with `supabase secrets list` (it shows names and digests, not
+values).
+
+### 5. Deploy the edge function
+
+From the repo root:
+
+```sh
+supabase functions deploy submit-answer
+```
+
+Check it responds:
+
+```sh
+curl -i -X POST \
+  "https://<your-project-ref>.supabase.co/functions/v1/submit-answer" \
+  -H "Authorization: Bearer <your anon public key>" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"the stars say yes"}'
+```
+
+You should get JSON back with `"status":"approved"` or `"status":"rejected"`
+plus a reason. Watch logs while testing with:
+
+```sh
+supabase functions logs submit-answer
+```
+
+### 6. Run it locally
+
+```sh
+npm install
+npm start
+```
+
+http://localhost:3000 — `http://localhost:3000` is already in the function's
+CORS allowlist.
+
+### 7. Deploy the site
+
+```sh
+npm run deploy
+```
+
+That builds and pushes to the `gh-pages` branch. The env vars are inlined at
+build time, so `.env` must be filled in before you run it.
+
+---
+
+## Reviewing submissions
+
+Rejected answers are stored, not thrown away, so you can look at what people
+tried and override the classifier.
+
+In **SQL Editor**:
+
+```sql
+-- what got rejected and why
+select created_at, text, rejection_reason
+from public.answers
+where status = 'rejected'
+order by created_at desc;
+
+-- override: let one through
+update public.answers
+set status = 'approved', rejection_reason = null
+where id = '<the uuid>';
+
+-- take one back down
+update public.answers
+set status = 'rejected', rejection_reason = 'removed by hand'
+where id = '<the uuid>';
+```
+
+---
+
+## Knobs
+
+All in [`supabase/functions/submit-answer/index.ts`](supabase/functions/submit-answer/index.ts),
+at the top of the file:
+
+| Constant | Default | What it does |
+| --- | --- | --- |
+| `MAX_LENGTH` | 200 | Longest accepted answer, after trimming |
+| `MIN_LENGTH` | 2 | Shortest accepted answer |
+| `MAX_SUBMISSIONS_PER_HOUR` | 5 | Per hashed IP, rolling hour. Rejected ones count too |
+| `MODEL` | `claude-opus-5` | Which Claude model classifies submissions |
+| `ALLOWED_ORIGINS` | GitHub Pages + localhost | CORS allowlist |
+
+Redeploy with `supabase functions deploy submit-answer` after changing any of
+them. The moderation prompt lives in the same file as `MODERATION_SYSTEM`.
+
+---
+
+## Scripts
+
+| Command | What it does |
+| --- | --- |
+| `npm start` | Dev server on http://localhost:3000 |
+| `npm test` | Test runner (watch mode) |
+| `npm run build` | Production build into `build/` |
+| `npm run deploy` | Build, then publish `build/` to the `gh-pages` branch |
+
+Bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
